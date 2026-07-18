@@ -25,10 +25,9 @@
             align-items: center;
             min-height: 100vh;
             color: var(--text-main);
-            touch-action: manipulation; /* 防止連點放大 */
+            touch-action: manipulation;
         }
 
-        /* 頂部控制面板與計分板 */
         header {
             width: 100%;
             background-color: var(--header-bg);
@@ -63,7 +62,6 @@
             border-radius: 20px;
         }
 
-        /* 主畫面與字卡容器 */
         main {
             flex: 1;
             display: flex;
@@ -78,7 +76,7 @@
             width: 90%;
             max-width: 400px;
             aspect-ratio: 4 / 3;
-            perspective: 1000px; /* 3D 空間透視 */
+            perspective: 1000px;
             cursor: pointer;
         }
 
@@ -87,10 +85,9 @@
             height: 100%;
             position: relative;
             transition: transform 0.6s cubic-bezier(0.4, 0.2, 0.2, 1);
-            transform-style: preserve-3d; /* 保留 3D 結構 */
+            transform-style: preserve-3d;
         }
 
-        /* 翻牌觸發 */
         .card-inner.flipped {
             transform: rotateY(180deg);
         }
@@ -99,7 +96,7 @@
             position: absolute;
             width: 100%;
             height: 100%;
-            backface-visibility: hidden; /* 隱藏背面 */
+            backface-visibility: hidden;
             display: flex;
             justify-content: center;
             align-items: center;
@@ -123,7 +120,6 @@
             color: #E74C3C;
         }
 
-        /* 底部評分按鈕 */
         footer {
             width: 100%;
             padding: 20px;
@@ -140,7 +136,7 @@
 
         .rating-buttons.hidden {
             opacity: 0;
-            pointer-events: none; /* 隱藏時不可點擊 */
+            pointer-events: none;
         }
 
         .rating-buttons button {
@@ -163,7 +159,6 @@
         #btn-wrong { background-color: var(--btn-wrong); }
         #btn-correct { background-color: var(--btn-correct); }
 
-        /* RWD 平板與手機微調 */
         @media (max-width: 480px) {
             .card-face { font-size: 2.8rem; }
             .rating-buttons button { font-size: 1.1rem; padding: 12px 20px; }
@@ -176,8 +171,7 @@
     <header>
         <div class="controls">
             <select id="topic-select">
-                <option value="fruits">🍓 水果 (Fruits)</option>
-                <option value="sports">⚽ 運動 (Sports)</option>
+                <option value="">載入清單中...</option>
             </select>
             <select id="mode-select">
                 <option value="jp2ch">看日文 猜中文</option>
@@ -190,12 +184,8 @@
     <main>
         <div class="card-container" id="card-container">
             <div class="card-inner" id="card-inner">
-                <div class="card-face card-front" id="card-front">
-                    讀取中...
-                </div>
-                <div class="card-face card-back" id="card-back">
-                    讀取中...
-                </div>
+                <div class="card-face card-front" id="card-front">讀取中...</div>
+                <div class="card-face card-back" id="card-back">讀取中...</div>
             </div>
         </div>
     </main>
@@ -208,13 +198,13 @@
     </footer>
 
     <script>
-        // 狀態變數
+        // --- 狀態變數 ---
         let wordsData = [];
         let currentIndex = 0;
         let score = 0;
         let isFlipped = false;
 
-        // DOM 元素
+        // --- DOM 元素 ---
         const topicSelect = document.getElementById('topic-select');
         const modeSelect = document.getElementById('mode-select');
         const cardInner = document.getElementById('card-inner');
@@ -225,7 +215,106 @@
         const btnWrong = document.getElementById('btn-wrong');
         const btnCorrect = document.getElementById('btn-correct');
 
-        // 打亂陣列順序，讓小朋友每次玩的順序都不一樣
+        // --- 快取與 API 設定 ---
+        const CACHE_KEY = 'jp_app_topics';
+        const CACHE_TIME_KEY = 'jp_app_topics_time';
+        const CACHE_TTL = 24 * 60 * 60 * 1000; // 24小時
+        const GITHUB_API_URL = 'https://api.github.com/repos/wush978/my-japanese-app/contents/data';
+        
+        // --- 選單顯示名稱對照表 ---
+        // 若新增的 json 檔名沒有寫在這裡，選單會直接顯示英文字母大寫開頭（例如 animals -> Animals）
+        const topicDisplayNames = {
+            'fruits': '🍓 水果 (Fruits)',
+            'sports': '🏃 運動 (Sports)',
+            'soccer': '⚽ 足球常用單字'
+        };
+
+        // 1. 初始化與讀取目錄
+        async function initApp() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const forceRefresh = urlParams.get('refresh') === '1';
+
+            if (forceRefresh) {
+                // 自動清除網址上的 ?refresh=1，避免下次重整時又發送 API 請求
+                const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+                window.history.replaceState({path: newUrl}, '', newUrl);
+            }
+
+            const cachedData = localStorage.getItem(CACHE_KEY);
+            const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
+            const now = Date.now();
+            let fileIds = [];
+
+            // 判斷是否使用快取
+            if (!forceRefresh && cachedData && cachedTime && (now - cachedTime < CACHE_TTL)) {
+                console.log('使用本地快取的檔案目錄');
+                fileIds = JSON.parse(cachedData);
+            } else {
+                console.log('向 GitHub API 請求最新檔案目錄');
+                try {
+                    const response = await fetch(GITHUB_API_URL);
+                    if (!response.ok) throw new Error('無法取得 GitHub 目錄');
+                    const data = await response.json();
+                    
+                    // 過濾出 .json 檔案並去掉副檔名
+                    fileIds = data
+                        .filter(item => item.name.endsWith('.json'))
+                        .map(item => item.name.replace('.json', ''));
+                    
+                    // 更新本地快取
+                    localStorage.setItem(CACHE_KEY, JSON.stringify(fileIds));
+                    localStorage.setItem(CACHE_TIME_KEY, now.toString());
+                } catch (error) {
+                    console.error('API 讀取失敗:', error);
+                    // 如果 API 失敗又沒有快取，提供預設選項確保網頁不會壞掉
+                    fileIds = cachedData ? JSON.parse(cachedData) : ['fruits', 'sports', 'soccer'];
+                }
+            }
+
+            populateTopicSelect(fileIds);
+            loadData(); // 目錄載入完畢後，開始讀取第一個選項的單字
+        }
+
+        // 2. 建立下拉選單
+        function populateTopicSelect(fileIds) {
+            topicSelect.innerHTML = '';
+            if (fileIds.length === 0) {
+                const option = document.createElement('option');
+                option.textContent = '找不到資料';
+                topicSelect.appendChild(option);
+                return;
+            }
+
+            fileIds.forEach(id => {
+                const option = document.createElement('option');
+                option.value = id;
+                // 優先使用對照表名稱，若無則將首字母大寫
+                option.textContent = topicDisplayNames[id] || (id.charAt(0).toUpperCase() + id.slice(1));
+                topicSelect.appendChild(option);
+            });
+        }
+
+        // 3. 讀取單字 JSON 資料
+        async function loadData() {
+            if (!topicSelect.value) return;
+            const topic = topicSelect.value;
+            try {
+                // 在檔名後加上時間戳避免瀏覽器快取舊的 json 內容
+                const response = await fetch(`data/${topic}.json?t=${Date.now()}`);
+                if (!response.ok) throw new Error('找不到單字檔案');
+                
+                wordsData = await response.json();
+                shuffle(wordsData);
+                currentIndex = 0;
+                renderCard();
+            } catch (error) {
+                console.error("讀取單字失敗:", error);
+                cardFront.textContent = "⚠️ 找不到資料";
+                cardBack.textContent = "請確認資料夾中是否有此檔案";
+            }
+        }
+
+        // --- 核心互動邏輯 ---
         function shuffle(array) {
             for (let i = array.length - 1; i > 0; i--) {
                 const j = Math.floor(Math.random() * (i + 1));
@@ -233,33 +322,11 @@
             }
         }
 
-        // 讀取 JSON 資料
-        async function loadData() {
-            const topic = topicSelect.value;
-            try {
-                // 使用 fetch 讀取 data 資料夾內的 json
-                const response = await fetch(`data/${topic}.json`);
-                if (!response.ok) throw new Error('找不到檔案');
-                
-                wordsData = await response.json();
-                shuffle(wordsData); // 隨機洗牌
-                currentIndex = 0;
-                renderCard();
-            } catch (error) {
-                console.error("讀取資料失敗:", error);
-                cardFront.textContent = "⚠️ 找不到資料";
-                cardBack.textContent = "請確認是否在伺服器環境運行";
-            }
-        }
-
-        // 更新字卡內容與狀態
         function renderCard() {
             if (wordsData.length === 0) return;
-            
             const currentWord = wordsData[currentIndex];
             const mode = modeSelect.value;
 
-            // 確保翻回正面且隱藏按鈕
             isFlipped = false;
             cardInner.classList.remove('flipped');
             ratingButtons.classList.add('hidden');
@@ -273,44 +340,25 @@
             }
         }
 
-        // Web Speech API 日文發音
         function speakJapanese(text) {
             if ('speechSynthesis' in window) {
-                // 先取消正在播放的語音
+                // 過濾掉括號內的平假名發音提示，避免唸兩次
+                const cleanText = text.replace(/ \(.*?\)/g, '');
                 window.speechSynthesis.cancel(); 
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'ja-JP'; // 設定為日文
-                utterance.rate = 0.85;    // 語速稍微放慢適合小朋友聽
+                const utterance = new SpeechSynthesisUtterance(cleanText);
+                utterance.lang = 'ja-JP';
+                utterance.rate = 0.85;
                 window.speechSynthesis.speak(utterance);
             }
         }
 
-        // 點擊字卡翻面
-        document.getElementById('card-container').addEventListener('click', () => {
-            if (isFlipped || wordsData.length === 0) return; // 如果已經翻面則不動作
-            
-            isFlipped = true;
-            cardInner.classList.add('flipped');
-            ratingButtons.classList.remove('hidden');
-
-            // 不管是哪種模式，翻面時一律唸出日文發音
-            const currentWord = wordsData[currentIndex];
-            speakJapanese(currentWord.jp);
-        });
-
-        // 換下一個單字
         function nextWord() {
-            currentIndex = (currentIndex + 1) % wordsData.length; // 循環播放
-            
-            // 翻回正面，隱藏按鈕
+            currentIndex = (currentIndex + 1) % wordsData.length;
             cardInner.classList.remove('flipped');
             ratingButtons.classList.add('hidden');
-            
-            // 等待翻牌動畫 (0.6秒) 完成一半時替換文字，視覺上最順暢
             setTimeout(renderCard, 300);
         }
 
-        // 更新分數與檢查滿分
         function updateScore() {
             scoreBoard.textContent = `⭐ 已記住：${score} / 5`;
             if (score >= 5) {
@@ -318,17 +366,24 @@
                     alert('🎉 恭喜滿分！你太棒了！');
                     score = 0;
                     scoreBoard.textContent = `⭐ 已記住：0 / 5`;
-                }, 300); // 等待下一個單字的動畫跑完再跳出通知
+                }, 300);
             }
         }
 
-        // 事件監聽：切換主題或模式
+        // --- 事件監聽 ---
+        document.getElementById('card-container').addEventListener('click', () => {
+            if (isFlipped || wordsData.length === 0) return; 
+            isFlipped = true;
+            cardInner.classList.add('flipped');
+            ratingButtons.classList.remove('hidden');
+            speakJapanese(wordsData[currentIndex].jp);
+        });
+
         topicSelect.addEventListener('change', loadData);
         modeSelect.addEventListener('change', renderCard);
 
-        // 事件監聽：評分按鈕
         btnWrong.addEventListener('click', (e) => {
-            e.stopPropagation(); // 阻止事件冒泡觸發字卡點擊
+            e.stopPropagation();
             nextWord();
         });
 
@@ -339,8 +394,8 @@
             nextWord();
         });
 
-        // 初始化：網頁載入時立刻讀取資料
-        window.onload = loadData;
+        // 啟動 App
+        window.onload = initApp;
     </script>
 </body>
 </html>
