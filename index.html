@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>好玩的日文單字卡</title>
+    <!-- 引入煙火特效套件 -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
     <style>
         :root {
             --primary-bg: #FFF9E6;
@@ -178,7 +180,8 @@
                 <option value="ch2jp">看中文 猜日文</option>
             </select>
         </div>
-        <div class="score-board" id="score-board">⭐ 已記住：0 / 5</div>
+        <!-- 分數顯示調整為持續累加模式 -->
+        <div class="score-board" id="score-board">⭐ 已記住：0</div>
     </header>
 
     <main>
@@ -218,15 +221,15 @@
         // --- 快取與 API 設定 ---
         const CACHE_KEY = 'jp_app_topics';
         const CACHE_TIME_KEY = 'jp_app_topics_time';
-        const CACHE_TTL = 24 * 60 * 60 * 1000; // 24小時
+        const CACHE_TTL = 24 * 60 * 60 * 1000;
         const GITHUB_API_URL = 'https://api.github.com/repos/wush978/my-japanese-app/contents/data';
         
         // --- 選單顯示名稱對照表 ---
-        // 若新增的 json 檔名沒有寫在這裡，選單會直接顯示英文字母大寫開頭（例如 animals -> Animals）
         const topicDisplayNames = {
             'fruits': '🍓 水果 (Fruits)',
             'sports': '🏃 運動 (Sports)',
-            'soccer': '⚽ 足球常用單字'
+            'soccer': '⚽ 足球常用單字',
+            'minru_life': '🏠 生活單字'
         };
 
         // 1. 初始化與讀取目錄
@@ -235,7 +238,6 @@
             const forceRefresh = urlParams.get('refresh') === '1';
 
             if (forceRefresh) {
-                // 自動清除網址上的 ?refresh=1，避免下次重整時又發送 API 請求
                 const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
                 window.history.replaceState({path: newUrl}, '', newUrl);
             }
@@ -245,34 +247,28 @@
             const now = Date.now();
             let fileIds = [];
 
-            // 判斷是否使用快取
             if (!forceRefresh && cachedData && cachedTime && (now - cachedTime < CACHE_TTL)) {
-                console.log('使用本地快取的檔案目錄');
                 fileIds = JSON.parse(cachedData);
             } else {
-                console.log('向 GitHub API 請求最新檔案目錄');
                 try {
                     const response = await fetch(GITHUB_API_URL);
                     if (!response.ok) throw new Error('無法取得 GitHub 目錄');
                     const data = await response.json();
                     
-                    // 過濾出 .json 檔案並去掉副檔名
                     fileIds = data
                         .filter(item => item.name.endsWith('.json'))
                         .map(item => item.name.replace('.json', ''));
                     
-                    // 更新本地快取
                     localStorage.setItem(CACHE_KEY, JSON.stringify(fileIds));
                     localStorage.setItem(CACHE_TIME_KEY, now.toString());
                 } catch (error) {
                     console.error('API 讀取失敗:', error);
-                    // 如果 API 失敗又沒有快取，提供預設選項確保網頁不會壞掉
                     fileIds = cachedData ? JSON.parse(cachedData) : ['fruits', 'sports', 'soccer'];
                 }
             }
 
             populateTopicSelect(fileIds);
-            loadData(); // 目錄載入完畢後，開始讀取第一個選項的單字
+            loadData();
         }
 
         // 2. 建立下拉選單
@@ -288,7 +284,6 @@
             fileIds.forEach(id => {
                 const option = document.createElement('option');
                 option.value = id;
-                // 優先使用對照表名稱，若無則將首字母大寫
                 option.textContent = topicDisplayNames[id] || (id.charAt(0).toUpperCase() + id.slice(1));
                 topicSelect.appendChild(option);
             });
@@ -299,18 +294,22 @@
             if (!topicSelect.value) return;
             const topic = topicSelect.value;
             try {
-                // 在檔名後加上時間戳避免瀏覽器快取舊的 json 內容
                 const response = await fetch(`data/${topic}.json?t=${Date.now()}`);
                 if (!response.ok) throw new Error('找不到單字檔案');
                 
                 wordsData = await response.json();
                 shuffle(wordsData);
                 currentIndex = 0;
+                
+                // 更換主題時重置分數
+                score = 0;
+                scoreBoard.textContent = `⭐ 已記住：${score}`;
+                
                 renderCard();
             } catch (error) {
                 console.error("讀取單字失敗:", error);
                 cardFront.textContent = "⚠️ 找不到資料";
-                cardBack.textContent = "請確認資料夾中是否有此檔案";
+                cardBack.textContent = "請確認檔案是否存在";
             }
         }
 
@@ -342,7 +341,6 @@
 
         function speakJapanese(text) {
             if ('speechSynthesis' in window) {
-                // 過濾掉括號內的平假名發音提示，避免唸兩次
                 const cleanText = text.replace(/ \(.*?\)/g, '');
                 window.speechSynthesis.cancel(); 
                 const utterance = new SpeechSynthesisUtterance(cleanText);
@@ -359,14 +357,92 @@
             setTimeout(renderCard, 300);
         }
 
+        // --- 動態等級與煙火特效邏輯 ---
         function updateScore() {
-            scoreBoard.textContent = `⭐ 已記住：${score} / 5`;
-            if (score >= 5) {
-                setTimeout(() => {
-                    alert('🎉 恭喜滿分！你太棒了！');
-                    score = 0;
-                    scoreBoard.textContent = `⭐ 已記住：0 / 5`;
-                }, 300);
+            scoreBoard.textContent = `⭐ 已記住：${score}`;
+            
+            // 每 5 題觸發一次升級特效
+            if (score > 0 && score % 5 === 0) {
+                let level = Math.floor(score / 5);
+                triggerFireworks(level);
+            }
+        }
+
+        function triggerFireworks(level) {
+            // 如果超過 8 級，就一直維持在第 8 級的特效
+            if (level > 8) level = 8;
+            
+            const now = Date.now();
+            
+            switch(level) {
+                case 1:
+                    // Level 1: 底部單次小噴發
+                    confetti({ particleCount: 60, spread: 60, origin: { y: 0.8 } });
+                    break;
+                case 2:
+                    // Level 2: 範圍更大、數量更多
+                    confetti({ particleCount: 120, spread: 100, origin: { y: 0.7 } });
+                    break;
+                case 3:
+                    // Level 3: 左右大砲雙管齊發
+                    confetti({ particleCount: 100, angle: 60, spread: 55, origin: { x: 0, y: 0.8 } });
+                    confetti({ particleCount: 100, angle: 120, spread: 55, origin: { x: 1, y: 0.8 } });
+                    break;
+                case 4:
+                    // Level 4: 滿天星 (閃耀金黃色)
+                    confetti({ 
+                        particleCount: 150, 
+                        spread: 120, 
+                        origin: { y: 0.6 }, 
+                        shapes: ['star'], 
+                        colors: ['#FFD700', '#FFA500', '#FF8C00'] 
+                    });
+                    break;
+                case 5:
+                    // Level 5: 左右連續發射 (1.5秒)
+                    const end5 = now + 1500;
+                    (function frame5() {
+                        confetti({ particleCount: 5, angle: 60, spread: 55, origin: { x: 0, y: 0.8 } });
+                        confetti({ particleCount: 5, angle: 120, spread: 55, origin: { x: 1, y: 0.8 } });
+                        if (Date.now() < end5) requestAnimationFrame(frame5);
+                    }());
+                    break;
+                case 6:
+                    // Level 6: 浪漫降雪 (從頂部落下，持續2秒)
+                    const end6 = now + 2000;
+                    (function frame6() {
+                        confetti({ 
+                            particleCount: 12, spread: 180, 
+                            origin: { y: -0.1, x: Math.random() }, 
+                            startVelocity: 20, gravity: 0.6 
+                        });
+                        if (Date.now() < end6) requestAnimationFrame(frame6);
+                    }());
+                    break;
+                case 7:
+                    // Level 7: 多點煙火爆發 (持續2.5秒)
+                    const end7 = now + 2500;
+                    const interval7 = setInterval(function() {
+                        if (Date.now() > end7) return clearInterval(interval7);
+                        confetti({ 
+                            particleCount: 60, startVelocity: 30, spread: 360, 
+                            origin: { x: Math.random(), y: Math.random() - 0.2 },
+                            zIndex: 1000
+                        });
+                    }, 300);
+                    break;
+                case 8:
+                    // Level 8 (Max): 終極滿分狂歡 (全螢幕強烈大放送，持續3秒)
+                    const end8 = now + 3000;
+                    (function frame8() {
+                        // 左右持續噴發
+                        confetti({ particleCount: 12, angle: 60, spread: 60, origin: { x: 0, y: 0.8 }, zIndex: 1000 });
+                        confetti({ particleCount: 12, angle: 120, spread: 60, origin: { x: 1, y: 0.8 }, zIndex: 1000 });
+                        // 中間穿插星星
+                        confetti({ particleCount: 5, spread: 120, origin: { y: 0.3, x: 0.5 }, shapes: ['star'], colors: ['#FFD700', '#FFF'] });
+                        if (Date.now() < end8) requestAnimationFrame(frame8);
+                    }());
+                    break;
             }
         }
 
