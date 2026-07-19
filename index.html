@@ -341,15 +341,29 @@
 
         function speakJapanese(text) {
             if ('speechSynthesis' in window) {
-                const cleanText = text.replace(/ \(.*?\)/g, '');
                 window.speechSynthesis.cancel(); 
-                const utterance = new SpeechSynthesisUtterance(cleanText);
+                
+                let textToSpeak = text;
+                
+                // 尋找括號內的內容，支援半形或全形括號
+                // 例如 "集まって (あつまって)" 或 "指 (Yubi)"
+                const match = text.match(/\((.*?)\)/) || text.match(/（(.*?)）/);
+                
+                if (match && match[1]) {
+                    // 如果有括號，就提取括號裡面的「純發音」給 Safari 唸
+                    textToSpeak = match[1];
+                } else {
+                    // 如果沒有括號（例如 "パソコン"），通常是純假名，直接唸沒問題
+                    textToSpeak = text;
+                }
+
+                const utterance = new SpeechSynthesisUtterance(textToSpeak);
                 utterance.lang = 'ja-JP';
-                utterance.rate = 0.85;
+                utterance.rate = 0.85; // 稍慢的語速
                 window.speechSynthesis.speak(utterance);
             }
         }
-
+        
         function nextWord() {
             currentIndex = (currentIndex + 1) % wordsData.length;
             cardInner.classList.remove('flipped');
